@@ -1,163 +1,112 @@
 import random
 import os
-import time
-import hashlib
-import secrets
-import re
 import requests
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-LOCAL_TXT = os.path.join(BASE, "../data/local_tags.txt")
-
-GLOBAL_STATE = {"seed": None}
-
 DEFAULT_APIS = {
-    "Safebooru": "https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&limit=1",
-    "Gelbooru": "https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1&limit=1",
-    "Konachan": "https://konachan.com/post.json?limit=1",
-    "Yande": "https://yande.re/post.json?limit=1",
-    "Danbooru": "https://danbooru.donmai.us/posts.json?limit=1&random=true"
+    "Safebooru": "https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&limit={limit}&tags={tags}",
+    "Gelbooru": "https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1&limit={limit}&tags={tags}",
+    "Danbooru": "https://danbooru.donmai.us/posts.json?limit={limit}&tags={tags}",
+    "Konachan": "https://konachan.com/post.json?limit={limit}&tags={tags}",
+    "Yandere": "https://yande.re/post.json?limit={limit}&tags={tags}",
+    "Lolibooru": "https://lolibooru.moe/post.json?limit={limit}&tags={tags}",
+    "Xbooru": "https://xbooru.com/index.php?page=dapi&s=post&q=index&json=1&limit={limit}&tags={tags}",
+    "Rule35": "https://rule35.xyz/index.php?page=dapi&s=post&q=index&json=1&limit={limit}&tags={tags}"
 }
 
-CONFLICT_GROUPS = [
-    {"day", "night"},
-    {"smile", "crying"},
-    {"open mouth", "closed mouth"},
-    {"long hair", "short hair"},
-    {"solo", "2girls"},
-    {"looking at viewer", "looking away"},
-    {"1girl", "1boy"}
-]
-
-FALLBACK_TAGS = [
-    "blush", "light smile", "hair ornament", "detailed hair",
-    "soft lighting", "cinematic lighting", "depth of field",
-    "beautiful eyes", "delicate features", "standing", "portrait",
-    "upper body", "hair ribbon", "clean background", "outdoors"
-]
-
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "application/json",
-}
-
-def clean_tag(tag):
-    tag = tag.strip()
-    tag = re.sub(r"[^a-zA-Z0-9_\s\-]", "", tag)
-    return tag.lower()
-
-def load_local_txt():
-    if os.path.exists(LOCAL_TXT):
-        with open(LOCAL_TXT, "r", encoding="utf-8") as f:
-            return [clean_tag(t) for t in f.read().split(",") if t.strip()]
-    return []
-
-def new_seed():
-    raw = f"{time.time_ns()}_{secrets.token_hex(8)}"
-    seed = int(hashlib.sha256(raw.encode()).hexdigest(), 16) % (10**12)
-    GLOBAL_STATE["seed"] = seed
-    return seed
+_seed = 0
+HEADERS = {"User-Agent":"Mozilla/5.0"}
 
 def reset_seed():
-    GLOBAL_STATE["seed"] = None
-    random.seed(None)
-    return "随机种子已重置"
+    global _seed
+    _seed = random.getrandbits(64)
+    random.seed(_seed)
 
-def has_conflict(tag, selected):
-    t = clean_tag(tag)
-    sel_clean = [clean_tag(s) for s in selected]
-    for group in CONFLICT_GROUPS:
-        if t in group:
-            for s in sel_clean:
-                if s in group and s != t:
-                    return True
-    return False
+reset_seed()
 
-def fetch_api_tags(api_url):
-    for _ in range(2):
-        try:
-            r = requests.get(api_url, headers=HEADERS, timeout=4)
-            r.raise_for_status()
-            data = r.json()
-            tags = ""
-            if isinstance(data, list) and len(data) > 0:
-                post = data[0]
-                tags = post.get("tag_string") or post.get("tags", "")
-            elif isinstance(data, dict) and "post" in data:
-                posts = data["post"]
-                if isinstance(posts, list) and len(posts) > 0:
-                    tags = posts[0].get("tags", "")
-            return [clean_tag(t) for t in tags.split() if t]
-        except Exception:
-            continue
-    return []
-
-def build_prompt(
-    character,
-    blacklist,
-    use_api=False,
-    api_choice=None,
-    custom_api=None,
-    use_local=True
-):
-    seed = new_seed()
-    rng = random.Random(seed)
-    base_options = [["1girl", "solo"], ["2girls"]]
-    result = rng.choice(base_options).copy()
-
-    if character:
-        result.append(clean_tag(character))
-
-    pool = []
-    if use_api:
-        api_list = []
-        if custom_api:
-            api_list.append(custom_api)
-        elif api_choice and api_choice in DEFAULT_APIS:
-            api_list.append(DEFAULT_APIS[api_choice])
+def fetch_tags_from_api(api_name, custom_api, character):
+    tags_list = []
+    try:
+        tag_str = character.strip() if character.strip() else "random"
+        if custom_api.strip():
+            url = custom_api.format(limit=30, tags=tag_str)
         else:
-            api_list = list(DEFAULT_APIS.values())
-        for api_url in api_list:
-            tags = fetch_api_tags(api_url)
-            if tags:
-                pool.extend(tags)
-                break
+            url = DEFAULT_APIS[api_name].format(limit=30, tags=tag_str)
+        res = requests.get(url, headers=HEADERS, timeout=8)
+        res.raise_for_status()
+        data = res.json()
+        items = data.get("post", data) if isinstance(data, dict) else data
+        if not items:
+            return []
+        random.shuffle(items)
+        for item in items:
+            t = item.get("tags") or item.get("tag_string", "")
+            if t:
+                tags_list.extend([x.strip() for x in t.split(" ") if x.strip()])
+    except:
+        pass
+    return tags_list
+
+def load_local_tags(data_path):
+    tags_list = []
+    if not os.path.exists(data_path):
+        os.makedirs(data_path, exist_ok=True)
+        return tags_list
+    for fname in os.listdir(data_path):
+        if fname.endswith(".txt"):
+            full_path = os.path.join(data_path, fname)
+            try:
+                with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                    parts = [t.strip() for t in content.split(",") if t.strip()]
+                    tags_list.extend(parts)
+            except:
+                continue
+    return tags_list
+
+def build_prompt(character, blacklist, use_api, api_choice, custom_api, use_local):
+    reset_seed()
+    data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../data"))
+    all_tags = []
+
+    if use_api:
+        api_tags = fetch_tags_from_api(api_choice, custom_api, character)
+        all_tags.extend(api_tags)
 
     if use_local:
-        pool.extend(load_local_txt())
+        local_tags = load_local_tags(data_dir)
+        all_tags.extend(local_tags)
 
-    if not pool:
-        pool = FALLBACK_TAGS.copy()
+    char_tags = [t.strip() for t in character.split(",") if t.strip()]
+    all_tags.extend(char_tags)
 
-    pool = list(dict.fromkeys(pool))
-    rng.shuffle(pool)
+    black_tags = set([t.strip().lower() for t in blacklist.split(",") if t.strip()])
+    filtered = []
+    for tag in all_tags:
+        if tag.lower() not in black_tags:
+            filtered.append(tag)
 
-    extra = []
-    for t in pool:
-        if len(extra) >= 35:
-            break
-        if not t:
-            continue
-        if t in result:
-            continue
-        if has_conflict(t, result + extra):
-            continue
-        extra.append(t)
+    filtered = list(set(filtered))
+    if len(filtered) == 0:
+        return ""
 
-    result += extra
+    random.shuffle(filtered)
 
-    fill_try = 0
-    while len(result) < 25 and fill_try < 30:
-        cand = rng.choice(FALLBACK_TAGS)
-        if cand not in result and not has_conflict(cand, result):
-            result.append(cand)
-        fill_try += 1
+    person_tags = []
+    normal_tags = []
+    for t in filtered:
+        if any(k in t.lower() for k in ["girl", "boy", "1girl", "2girl", "1boy", "2boy"]):
+            person_tags.append(t)
+        else:
+            normal_tags.append(t)
 
-    if blacklist:
-        banned = [x.strip().lower() for x in blacklist.split(",")]
-        result = [t for t in result if t.lower() not in banned]
+    person_tags = person_tags[:2]
+    need = max(25 - len(person_tags), 0)
+    pick_normal = random.sample(normal_tags, min(need, len(normal_tags))) if normal_tags else []
+    final = person_tags + pick_normal
 
-    result = list(dict.fromkeys(result))
-    result.append("masterpiece")
-    result.append("best quality")
-    return ", ".join(result)
+    if len(final) < 5:
+        default_tags = ["masterpiece", "best quality", "ultra detailed", "beautiful background", "cinematic lighting"]
+        final += default_tags
+
+    random.shuffle(final)
+    return ", ".join(final)
