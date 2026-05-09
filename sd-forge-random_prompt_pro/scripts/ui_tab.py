@@ -101,7 +101,7 @@ def on_tab():
                     clear_cache_btn = gr.Button("清理缓存")
 
                 gen_btn.click(generate, inputs=[character,blacklist,use_api,api_choice,custom_api,use_local], outputs=[output,status])
-                send_btn.click(None, inputs=[output], outputs=[status], _js="""(p)=>{const t=gradioApp().querySelector('#txt2img_prompt textarea');if(t){t.value=p;t.dispatchEvent(new Event("input"));}return "✅ 已发送";}""")
+                send_btn.click(None, inputs=[output], outputs=[status], _js="""(p)=>{const t=gradioApp().querySelector('#txt2img_prompt textarea');if(t){t.value=p;t.dispatchEvent(new Event("input"));}return "已发送";}""")
                 reset_btn.click(reset_seed, outputs=[status])
                 clear_cache_btn.click(clear_api_cache, outputs=[status])
 
