@@ -2,13 +2,15 @@ import os
 import sys
 import gradio as gr
 from modules import script_callbacks
+import random
+import time
+import requests
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 if CURRENT_DIR not in sys.path:
     sys.path.append(CURRENT_DIR)
 
 from core import build_prompt, reset_seed, DEFAULT_APIS
-import requests
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 API_CACHE = {}
@@ -19,37 +21,45 @@ def clear_api_cache():
     return "API缓存已清理"
 
 def generate(character, blacklist, use_api, api_choice, custom_api, use_local):
+    random.seed(time.time_ns())
+    reset_seed()
     prompt = build_prompt(character, blacklist, use_api, api_choice, custom_api, use_local)
+    if not prompt or len(prompt.strip()) == 0:
+        return "1girl, masterpiece, best quality, ultra detailed, beautiful background, cinematic lighting", "⚠ 无可用标签，已使用默认提示词"
     return prompt, "生成成功"
 
 def ranbooru_get_images(num, source, custom_api_url, search_tags):
     try:
         url = ""
+        random.seed(time.time_ns())
+
+        if not search_tags.strip():
+            search_tags = "random"
+        
         if custom_api_url.strip():
             url = custom_api_url.strip().format(limit=num, tags=search_tags)
         else:
             api_map = {
                 "Safebooru": "https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1&limit={limit}&tags={tags}",
                 "Gelbooru": "https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1&limit={limit}&tags={tags}",
-                "Danbooru": "https://danbooru.donmai.us/posts.json?limit={limit}&tags={tags}"
+                "Danbooru": "https://danbooru.donmai.us/posts.json?limit={limit}&tags={tags}",
+                "Konachan": "https://konachan.com/post.json?limit={limit}&tags={tags}",
+                "Yandere": "https://yande.re/post.json?limit={limit}&tags={tags}",
+                "Lolibooru": "https://lolibooru.moe/post.json?limit={limit}&tags={tags}",
+                "Xbooru": "https://xbooru.com/index.php?page=dapi&s=post&q=index&json=1&limit={limit}&tags={tags}",
+                "Rule35": "https://rule35.xyz/index.php?page=dapi&s=post&q=index&json=1&limit={limit}&tags={tags}"
             }
             url = api_map[source].format(limit=num, tags=search_tags)
 
-        cache_key = f"ranbooru_{url}"
-        if cache_key in API_CACHE:
-            data = API_CACHE[cache_key]
-            imgs = data["imgs"]
-            prompts = data["prompts"]
-            while len(prompts) < 12:
-                prompts.append("")
-            return imgs, *prompts, f"已加载 {len(imgs)} 张"
-
-        res = requests.get(url, headers=HEADERS, timeout=8)
+        res = requests.get(url, headers=HEADERS, timeout=10)
         res.raise_for_status()
         data = res.json()
         imgs, prompts = [], []
 
         items = data.get("post", data) if isinstance(data, dict) else data
+        if items:
+            random.shuffle(items)
+        
         for item in items[:num]:
             img_url = item.get("file_url") or item.get("image_url")
             tag = item.get("tags") or item.get("tag_string", "")
@@ -60,17 +70,14 @@ def ranbooru_get_images(num, source, custom_api_url, search_tags):
         while len(prompts) < 12:
             prompts.append("")
 
-        API_CACHE[cache_key] = {"imgs": imgs, "prompts": prompts}
         return imgs, *prompts, f"获取成功 {len(imgs)} 张"
     except Exception as e:
         empty = [""] * 12
         return [], *empty, f"错误：{str(e)[:40]}"
 
 def ranbooru_refresh(num, source, custom_api_url, search_tags):
-    global API_CACHE
-    for k in list(API_CACHE.keys()):
-        if k.startswith("ranbooru_"):
-            del API_CACHE[k]
+    random.seed(time.time_ns())
+    reset_seed()
     return ranbooru_get_images(num, source, custom_api_url, search_tags)
 
 def on_tab():
@@ -94,7 +101,7 @@ def on_tab():
                     clear_cache_btn = gr.Button("清理缓存")
 
                 gen_btn.click(generate, inputs=[character,blacklist,use_api,api_choice,custom_api,use_local], outputs=[output,status])
-                send_btn.click(None, inputs=[output], outputs=[status], _js="""(p)=>{const t=gradioApp().querySelector('#txt2img_prompt textarea');if(t){t.value=p;t.dispatchEvent(new Event("input"));}return "已发送";}""")
+                send_btn.click(None, inputs=[output], outputs=[status], _js="""(p)=>{const t=gradioApp().querySelector('#txt2img_prompt textarea');if(t){t.value=p;t.dispatchEvent(new Event("input"));}return "✅ 已发送";}""")
                 reset_btn.click(reset_seed, outputs=[status])
                 clear_cache_btn.click(clear_api_cache, outputs=[status])
 
@@ -102,10 +109,19 @@ def on_tab():
                 gr.Markdown("### 随机图片获取")
                 with gr.Row():
                     pic_num = gr.Slider(minimum=1, maximum=12, value=4, step=1, label="图片数量")
-                    pic_src = gr.Dropdown(["Safebooru","Gelbooru","Danbooru"], label="图源", value="Safebooru")
+                    pic_src = gr.Dropdown([
+                        "Safebooru",
+                        "Gelbooru",
+                        "Danbooru",
+                        "Konachan",
+                        "Yandere",
+                        "Lolibooru",
+                        "Xbooru",
+                        "Rule35"
+                    ], label="图源", value="Safebooru")
                 
                 custom_api_rb = gr.Textbox(label="自定义API {limit} {tags}")
-                search_tags = gr.Textbox(label="搜索标签", value="1girl")
+                search_tags = gr.Textbox(label="搜索标签（不输入则随机）", value="")
                 gallery = gr.Gallery(label="预览", columns=4, height=400)
 
                 with gr.Row():
